@@ -98,10 +98,40 @@ export function useBatterySocket({
   const mountedRef = useRef<boolean>(true);
   const voterTokenRef = useRef<string>(getOrCreateVoterToken());
   const connectionIdRef = useRef<string>(getOrCreateConnectionId());
+  const votingInFlightRef = useRef<boolean>(false);
   const onVoteConfirmedRef = useRef(onVoteConfirmed);
   const onAlreadyVotedRef = useRef(onAlreadyVoted);
   onVoteConfirmedRef.current = onVoteConfirmed;
   onAlreadyVotedRef.current = onAlreadyVoted;
+
+  const applyServerState = useCallback((state: SessionState) => {
+    if (!state) return;
+    setRoundId(state.roundId || 1);
+    if (state.votes) setVotes(state.votes);
+    if (state.presence) setPresence(state.presence);
+    if (Array.isArray(state.activities)) setActivities(state.activities);
+    if (Array.isArray(state.timeline)) setTimeline(state.timeline);
+    setHasVoted(Boolean(state.hasVoted));
+    setMyVote(state.myVote || null);
+  }, []);
+
+  const fetchStateSnapshot = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/state?room=${encodeURIComponent(roomId)}&voterToken=${encodeURIComponent(
+          voterTokenRef.current
+        )}`,
+        { cache: 'no-store' }
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as SessionState;
+      if (mountedRef.current) {
+        applyServerState(data);
+      }
+    } catch {
+      // ignore transient fetch errors
+    }
+  }, [applyServerState, roomId]);
 
   const sendMessage = useCallback((type: string, payload: Record<string, unknown> = {}) => {
     const ws = wsRef.current;
@@ -111,6 +141,20 @@ export function useBatterySocket({
     }
     return false;
   }, []);
+
+  // Initial HTTP state hydration so votes & charge appear immediately
+  useEffect(() => {
+    void fetchStateSnapshot();
+  }, [fetchStateSnapshot]);
+
+  // Polling fallback when WebSocket is not connected
+  useEffect(() => {
+    if (connectionState === 'connected') return;
+    const interval = window.setInterval(() => {
+      void fetchStateSnapshot();
+    }, 2500);
+    return () => window.clearInterval(interval);
+  }, [connectionState, fetchStateSnapshot]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -163,14 +207,7 @@ export function useBatterySocket({
         const payload = msg.payload || {};
 
         if (msg.type === 'state:init') {
-          const state = payload as SessionState;
-          setRoundId(state.roundId || 1);
-          setVotes(state.votes);
-          setPresence(state.presence || EMPTY_PRESENCE);
-          setActivities(state.activities || []);
-          setTimeline(state.timeline || []);
-          setHasVoted(Boolean(state.hasVoted));
-          setMyVote(state.myVote || null);
+          applyServerState(payload as SessionState);
           return;
         }
 
@@ -178,7 +215,6 @@ export function useBatterySocket({
           const chosen = payload.myVote as VoteCategory;
           setHasVoted(true);
           setMyVote(chosen);
-          onVoteConfirmedRef.current?.(chosen);
           return;
         }
 
@@ -188,7 +224,6 @@ export function useBatterySocket({
           setMyVote(existing);
           if (payload.votes) setVotes(payload.votes);
           if (payload.presence) setPresence(payload.presence);
-          onAlreadyVotedRef.current?.(existing);
           return;
         }
 
@@ -273,7 +308,7 @@ export function useBatterySocket({
         wsRef.current = null;
       }
     };
-  }, [roomId]);
+  }, [applyServerState, roomId]);
 
   // Real browser activity / idle detection (anonymous)
   useEffect(() => {
@@ -322,6 +357,8 @@ export function useBatterySocket({
     };
   }, [sendMessage]);
 
+  // Use reliable HTTP POST for vote mutation so every click is guaranteed to count & update battery immediately,
+  // while the server broadcasts the update via WebSocket to all other participants.
   const castVote = useCallback(
     async (category: VoteCategory) => {
       if (hasVoted) {
@@ -330,40 +367,46 @@ export function useBatterySocket({
         }
         return;
       }
+      if (votingInFlightRef.current) return;
+      votingInFlightRef.current = true;
+
       const eventId = createRandomToken('vote');
-      const sent = sendMessage('vote:cast', { eventId, category });
-      if (!sent) {
-        try {
-          const res = await fetch('/api/vote', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              roomId,
-              voterToken: voterTokenRef.current,
-              category,
-              eventId,
-            }),
-          });
-          const data = await res.json();
-          if (data?.state) {
-            setVotes(data.state.votes);
-            setPresence(data.state.presence || EMPTY_PRESENCE);
-            setActivities(data.state.activities || []);
-            setTimeline(data.state.timeline || []);
-            setHasVoted(Boolean(data.state.hasVoted));
-            setMyVote(data.state.myVote || null);
-          }
-          if (res.status === 409 && data?.myVote) {
-            onAlreadyVotedRef.current?.(data.myVote);
-          } else if (res.ok) {
-            onVoteConfirmedRef.current?.(category);
-          }
-        } catch {
-          // ignore transient network error
+      try {
+        const res = await fetch('/api/vote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            roomId,
+            voterToken: voterTokenRef.current,
+            category,
+            eventId,
+          }),
+        });
+        const data = await res.json();
+        if (data?.state) {
+          applyServerState(data.state as SessionState);
         }
+        if (res.status === 409 && data?.myVote) {
+          setHasVoted(true);
+          setMyVote(data.myVote);
+          onAlreadyVotedRef.current?.(data.myVote);
+        } else if (res.ok) {
+          setHasVoted(true);
+          setMyVote(category);
+          setLastActiveVote({ category, key: Date.now() });
+          onVoteConfirmedRef.current?.(category);
+        }
+      } catch {
+        // Fallback to WebSocket if HTTP request fails
+        const sent = sendMessage('vote:cast', { eventId, category });
+        if (sent) {
+          onVoteConfirmedRef.current?.(category);
+        }
+      } finally {
+        votingInFlightRef.current = false;
       }
     },
-    [hasVoted, myVote, roomId, sendMessage]
+    [applyServerState, hasVoted, myVote, roomId, sendMessage]
   );
 
   const setFocusedCategory = useCallback(
@@ -376,29 +419,20 @@ export function useBatterySocket({
 
   const resetSession = useCallback(async () => {
     const eventId = createRandomToken('reset');
-    const sent = sendMessage('session:reset', { eventId });
-    if (!sent) {
-      try {
-        const res = await fetch('/api/reset', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ roomId, eventId }),
-        });
-        const data = await res.json();
-        if (data?.state) {
-          setRoundId(data.state.roundId || 1);
-          setVotes(data.state.votes);
-          setPresence(data.state.presence || EMPTY_PRESENCE);
-          setActivities(data.state.activities || []);
-          setTimeline(data.state.timeline || []);
-          setHasVoted(false);
-          setMyVote(null);
-        }
-      } catch {
-        // ignore transient network error
+    try {
+      const res = await fetch('/api/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, eventId }),
+      });
+      const data = await res.json();
+      if (data?.state) {
+        applyServerState(data.state as SessionState);
       }
+    } catch {
+      sendMessage('session:reset', { eventId });
     }
-  }, [roomId, sendMessage]);
+  }, [applyServerState, roomId, sendMessage]);
 
   return {
     connectionState,

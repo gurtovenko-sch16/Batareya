@@ -661,7 +661,7 @@ async function startServer(): Promise<void> {
   } else {
     const distDir = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distDir));
-    app.get('/{*path}', (_req, res) => {
+    app.get('*', (_req, res) => {
       res.sendFile(path.resolve(distDir, 'index.html'));
     });
   }
