@@ -284,6 +284,106 @@ async function startServer(): Promise<void> {
     res.json(serializeRoomState(room, token));
   });
 
+  app.post('/api/vote', (req, res) => {
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const room = getOrCreateRoom(body.roomId);
+    const voterToken = sanitizeToken(body.voterToken);
+    const category = body.category;
+
+    if (!voterToken || !isValidCategory(category)) {
+      res.status(400).json({ error: 'Invalid vote payload' });
+      return;
+    }
+
+    const existingVote = room.votedTokens.get(voterToken);
+    if (existingVote) {
+      res.status(409).json({
+        alreadyVoted: true,
+        myVote: existingVote,
+        state: serializeRoomState(room, voterToken),
+      });
+      return;
+    }
+
+    const eventId =
+      typeof body.eventId === 'string' && body.eventId.length > 0
+        ? body.eventId.slice(0, 80)
+        : crypto.randomUUID();
+    const now = Date.now();
+
+    if (trackProcessedEvent(room, eventId)) {
+      room.votes[category] += 1;
+      room.votedTokens.set(voterToken, category);
+      const activity: ActivityEvent = {
+        id: eventId,
+        type: 'vote',
+        category,
+        timestamp: now,
+      };
+      pushActivity(room, activity);
+      recordBucket(room, true, now);
+      schedulePersist();
+
+      broadcastToRoom(room, {
+        type: 'vote:recorded',
+        payload: {
+          votes: { ...room.votes },
+          presence: computePresenceStats(room),
+          activity,
+          timeline: room.timeline,
+          category,
+        },
+      });
+    }
+
+    res.json({
+      ok: true,
+      myVote: category,
+      state: serializeRoomState(room, voterToken),
+    });
+  });
+
+  app.post('/api/reset', (req, res) => {
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const room = getOrCreateRoom(body.roomId);
+    const eventId =
+      typeof body.eventId === 'string' && body.eventId.length > 0
+        ? body.eventId.slice(0, 80)
+        : crypto.randomUUID();
+    const now = Date.now();
+
+    if (trackProcessedEvent(room, eventId)) {
+      room.roundId += 1;
+      room.votes = { support: 0, direction: 0, ideas: 0, transform: 0 };
+      room.votedTokens.clear();
+
+      const activity: ActivityEvent = {
+        id: eventId,
+        type: 'reset',
+        timestamp: now,
+      };
+      pushActivity(room, activity);
+      recordBucket(room, false, now);
+      schedulePersist();
+
+      broadcastToRoom(room, {
+        type: 'session:reset',
+        payload: {
+          roundId: room.roundId,
+          votes: { ...room.votes },
+          presence: computePresenceStats(room),
+          activity,
+          timeline: room.timeline,
+        },
+      });
+    }
+
+    res.json({
+      ok: true,
+      state: serializeRoomState(room, null),
+    });
+  });
+
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws' });
 

@@ -113,9 +113,18 @@ export default function App() {
 
   const handleCopyLink = async () => {
     try {
-      await navigator.clipboard.writeText(window.location.href);
+      const shareUrl = new URL(window.location.href);
+      const isDevPreview = shareUrl.hostname.startsWith('ais-dev-');
+      if (isDevPreview) {
+        shareUrl.hostname = shareUrl.hostname.replace(/^ais-dev-/, 'ais-pre-');
+      }
+      await navigator.clipboard.writeText(shareUrl.toString());
       setCopiedLink(true);
-      showToast('Посилання скопійовано!');
+      showToast(
+        isDevPreview
+          ? 'Скопійовано публічне посилання (активується після Share / Опублікувати)'
+          : 'Посилання скопійовано!'
+      );
       window.setTimeout(() => setCopiedLink(false), 2000);
     } catch {
       showToast('Скопіюйте адресу з адресного рядка');

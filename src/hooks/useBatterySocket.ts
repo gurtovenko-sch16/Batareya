@@ -323,7 +323,7 @@ export function useBatterySocket({
   }, [sendMessage]);
 
   const castVote = useCallback(
-    (category: VoteCategory) => {
+    async (category: VoteCategory) => {
       if (hasVoted) {
         if (myVote) {
           onAlreadyVotedRef.current?.(myVote);
@@ -331,9 +331,39 @@ export function useBatterySocket({
         return;
       }
       const eventId = createRandomToken('vote');
-      sendMessage('vote:cast', { eventId, category });
+      const sent = sendMessage('vote:cast', { eventId, category });
+      if (!sent) {
+        try {
+          const res = await fetch('/api/vote', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              roomId,
+              voterToken: voterTokenRef.current,
+              category,
+              eventId,
+            }),
+          });
+          const data = await res.json();
+          if (data?.state) {
+            setVotes(data.state.votes);
+            setPresence(data.state.presence || EMPTY_PRESENCE);
+            setActivities(data.state.activities || []);
+            setTimeline(data.state.timeline || []);
+            setHasVoted(Boolean(data.state.hasVoted));
+            setMyVote(data.state.myVote || null);
+          }
+          if (res.status === 409 && data?.myVote) {
+            onAlreadyVotedRef.current?.(data.myVote);
+          } else if (res.ok) {
+            onVoteConfirmedRef.current?.(category);
+          }
+        } catch {
+          // ignore transient network error
+        }
+      }
     },
-    [hasVoted, myVote, sendMessage]
+    [hasVoted, myVote, roomId, sendMessage]
   );
 
   const setFocusedCategory = useCallback(
@@ -344,10 +374,31 @@ export function useBatterySocket({
     [hasVoted, sendMessage]
   );
 
-  const resetSession = useCallback(() => {
+  const resetSession = useCallback(async () => {
     const eventId = createRandomToken('reset');
-    sendMessage('session:reset', { eventId });
-  }, [sendMessage]);
+    const sent = sendMessage('session:reset', { eventId });
+    if (!sent) {
+      try {
+        const res = await fetch('/api/reset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId, eventId }),
+        });
+        const data = await res.json();
+        if (data?.state) {
+          setRoundId(data.state.roundId || 1);
+          setVotes(data.state.votes);
+          setPresence(data.state.presence || EMPTY_PRESENCE);
+          setActivities(data.state.activities || []);
+          setTimeline(data.state.timeline || []);
+          setHasVoted(false);
+          setMyVote(null);
+        }
+      } catch {
+        // ignore transient network error
+      }
+    }
+  }, [roomId, sendMessage]);
 
   return {
     connectionState,
