@@ -1,13 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Check } from 'lucide-react';
 import { CATEGORIES_LIST } from '../types/battery';
 import type { PresenceStats, VoteCategory } from '../types/battery';
 import { BatteryIllustration } from './BatteryIllustrations';
 
 interface BatteryCardsProps {
   presence: PresenceStats;
-  hasVoted: boolean;
-  myVote: VoteCategory | null;
   lastActiveVote: { category: VoteCategory; key: number } | null;
   onVote: (category: VoteCategory) => void;
   onFocusChange: (category: VoteCategory | null) => void;
@@ -15,8 +12,6 @@ interface BatteryCardsProps {
 
 export const BatteryCards: React.FC<BatteryCardsProps> = ({
   presence,
-  hasVoted,
-  myVote,
   lastActiveVote,
   onVote,
   onFocusChange,
@@ -36,14 +31,10 @@ export const BatteryCards: React.FC<BatteryCardsProps> = ({
   }, [lastActiveVote]);
 
   const handleTrigger = (key: VoteCategory) => {
-    if (hasVoted) {
-      onVote(key);
-      return;
-    }
     setPulsedCard(key);
     window.setTimeout(() => {
       setPulsedCard((curr) => (curr === key ? null : curr));
-    }, 160);
+    }, 150);
     onVote(key);
   };
 
@@ -55,8 +46,6 @@ export const BatteryCards: React.FC<BatteryCardsProps> = ({
       {CATEGORIES_LIST.map((cat) => {
         const isPulsed = pulsedCard === cat.key;
         const hasRemoteRipple = remoteRipple?.category === cat.key;
-        const isMyChoice = hasVoted && myVote === cat.key;
-        const isLockedOther = hasVoted && myVote !== cat.key;
         const viewersCount = presence.focusCounts[cat.key] || 0;
 
         return (
@@ -64,28 +53,22 @@ export const BatteryCards: React.FC<BatteryCardsProps> = ({
             key={cat.key}
             role="button"
             tabIndex={0}
-            aria-pressed={isMyChoice}
-            aria-disabled={hasVoted}
             data-key={cat.key}
             onClick={() => handleTrigger(cat.key)}
-            onMouseEnter={() => !hasVoted && onFocusChange(cat.key)}
-            onMouseLeave={() => !hasVoted && onFocusChange(null)}
-            onFocus={() => !hasVoted && onFocusChange(cat.key)}
-            onBlur={() => !hasVoted && onFocusChange(null)}
+            onMouseEnter={() => onFocusChange(cat.key)}
+            onMouseLeave={() => onFocusChange(null)}
+            onFocus={() => onFocusChange(cat.key)}
+            onBlur={() => onFocusChange(null)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
                 handleTrigger(cat.key);
               }
             }}
-            className={`group relative flex flex-col items-center justify-between rounded-[22px] border-[3.5px] border-[#10163a] px-2.5 pt-2.5 pb-3 select-none text-center text-white transition-all duration-150 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-yellow-300 ${
-              hasVoted
-                ? isMyChoice
-                  ? 'cursor-default ring-4 ring-yellow-300 scale-[1.01]'
-                  : 'cursor-not-allowed opacity-70 saturate-[0.8]'
-                : isPulsed
-                  ? 'cursor-pointer translate-y-1 scale-[0.98]'
-                  : 'cursor-pointer hover:-translate-y-1 hover:brightness-105'
+            className={`group relative flex flex-col items-center justify-between rounded-[22px] border-[3.5px] border-[#10163a] px-2.5 pt-2.5 pb-3 cursor-pointer select-none text-center text-white transition-all duration-150 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-yellow-300 ${
+              isPulsed
+                ? 'translate-y-1 scale-[0.97]'
+                : 'hover:-translate-y-1 hover:brightness-105'
             }`}
             style={{
               background: `linear-gradient(180deg, ${cat.topColor} 0%, ${cat.botColor} 100%)`,
@@ -132,7 +115,7 @@ export const BatteryCards: React.FC<BatteryCardsProps> = ({
               <BatteryIllustration category={cat.key} />
             </div>
 
-            {/* Компактний заголовок картки як на зразку */}
+            {/* Компактний заголовок картки */}
             <div
               className="text-white font-black uppercase text-[0.78rem] xl:text-[0.84rem] leading-[1.2] px-1 my-2 min-h-[46px] flex items-center justify-center"
               style={{ textShadow: '0 2px 0 #10163a' }}
@@ -140,30 +123,15 @@ export const BatteryCards: React.FC<BatteryCardsProps> = ({
               {cat.label}
             </div>
 
-            {/* Кнопка ОБРАТИ / ОБРАНО */}
+            {/* Кнопка ОБРАТИ */}
             <div
               aria-hidden="true"
-              className={`w-full py-1.5 px-3 rounded-xl border-[3px] border-[#10163a] font-display text-xs xl:text-sm font-black uppercase tracking-wide flex items-center justify-center gap-1.5 transition-transform duration-100 ${
-                isMyChoice
-                  ? 'bg-[#2ed573] text-[#10163a]'
-                  : isLockedOther
-                    ? 'bg-slate-200/80 text-slate-600'
-                    : 'bg-gradient-to-b from-[#fff59d] to-[#fde047] text-[#10163a]'
-              }`}
+              className="w-full py-1.5 px-3 rounded-xl border-[3px] border-[#10163a] font-display text-xs xl:text-sm font-black uppercase tracking-wide flex items-center justify-center gap-1.5 bg-gradient-to-b from-[#fff59d] to-[#fde047] text-[#10163a] transition-transform duration-100"
               style={{
                 boxShadow: isPulsed ? '0 1px 0 #10163a' : '0 4px 0 #10163a',
               }}
             >
-              {isMyChoice ? (
-                <>
-                  <Check className="w-4 h-4 stroke-[3]" />
-                  <span>Обрано</span>
-                </>
-              ) : isLockedOther ? (
-                <span>Заблоковано</span>
-              ) : (
-                <span>Обрати</span>
-              )}
+              <span>Обрати</span>
             </div>
           </div>
         );

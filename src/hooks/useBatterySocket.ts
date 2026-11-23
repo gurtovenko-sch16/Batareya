@@ -14,7 +14,6 @@ export type ConnectionState = 'connecting' | 'connected' | 'reconnecting';
 interface UseBatterySocketOptions {
   roomId: string;
   onVoteConfirmed?: (category: VoteCategory) => void;
-  onAlreadyVoted?: (category: VoteCategory) => void;
 }
 
 const VOTER_TOKEN_STORAGE = 'battery_anon_voter_token_v1';
@@ -71,7 +70,6 @@ const EMPTY_PRESENCE: PresenceStats = {
 export function useBatterySocket({
   roomId,
   onVoteConfirmed,
-  onAlreadyVoted,
 }: UseBatterySocketOptions) {
   const [connectionState, setConnectionState] = useState<ConnectionState>('connecting');
   const [roundId, setRoundId] = useState<number>(1);
@@ -84,8 +82,6 @@ export function useBatterySocket({
   const [presence, setPresence] = useState<PresenceStats>(EMPTY_PRESENCE);
   const [activities, setActivities] = useState<ActivityEvent[]>([]);
   const [timeline, setTimeline] = useState<ActivityBucket[]>([]);
-  const [hasVoted, setHasVoted] = useState<boolean>(false);
-  const [myVote, setMyVote] = useState<VoteCategory | null>(null);
   const [lastActiveVote, setLastActiveVote] = useState<{
     category: VoteCategory;
     key: number;
@@ -98,21 +94,20 @@ export function useBatterySocket({
   const mountedRef = useRef<boolean>(true);
   const voterTokenRef = useRef<string>(getOrCreateVoterToken());
   const connectionIdRef = useRef<string>(getOrCreateConnectionId());
-  const votingInFlightRef = useRef<boolean>(false);
+  const voteQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingOptimisticCountRef = useRef<number>(0);
   const onVoteConfirmedRef = useRef(onVoteConfirmed);
-  const onAlreadyVotedRef = useRef(onAlreadyVoted);
   onVoteConfirmedRef.current = onVoteConfirmed;
-  onAlreadyVotedRef.current = onAlreadyVoted;
 
   const applyServerState = useCallback((state: SessionState) => {
     if (!state) return;
     setRoundId(state.roundId || 1);
-    if (state.votes) setVotes(state.votes);
+    if (state.votes && pendingOptimisticCountRef.current === 0) {
+      setVotes(state.votes);
+    }
     if (state.presence) setPresence(state.presence);
     if (Array.isArray(state.activities)) setActivities(state.activities);
     if (Array.isArray(state.timeline)) setTimeline(state.timeline);
-    setHasVoted(Boolean(state.hasVoted));
-    setMyVote(state.myVote || null);
   }, []);
 
   const fetchStateSnapshot = useCallback(async () => {
@@ -142,12 +137,10 @@ export function useBatterySocket({
     return false;
   }, []);
 
-  // Initial HTTP state hydration so votes & charge appear immediately
   useEffect(() => {
     void fetchStateSnapshot();
   }, [fetchStateSnapshot]);
 
-  // Polling fallback when WebSocket is not connected
   useEffect(() => {
     if (connectionState === 'connected') return;
     const interval = window.setInterval(() => {
@@ -211,24 +204,10 @@ export function useBatterySocket({
           return;
         }
 
-        if (msg.type === 'vote:confirmed') {
-          const chosen = payload.myVote as VoteCategory;
-          setHasVoted(true);
-          setMyVote(chosen);
-          return;
-        }
-
-        if (msg.type === 'vote:already_voted') {
-          const existing = payload.myVote as VoteCategory;
-          setHasVoted(true);
-          setMyVote(existing);
-          if (payload.votes) setVotes(payload.votes);
-          if (payload.presence) setPresence(payload.presence);
-          return;
-        }
-
         if (msg.type === 'vote:recorded') {
-          if (payload.votes) setVotes(payload.votes);
+          if (payload.votes && pendingOptimisticCountRef.current === 0) {
+            setVotes(payload.votes);
+          }
           if (payload.presence) setPresence(payload.presence);
           if (payload.activity) {
             const act: ActivityEvent = payload.activity;
@@ -260,11 +239,10 @@ export function useBatterySocket({
         }
 
         if (msg.type === 'session:reset') {
+          pendingOptimisticCountRef.current = 0;
           if (typeof payload.roundId === 'number') setRoundId(payload.roundId);
           if (payload.votes) setVotes(payload.votes);
           if (payload.presence) setPresence(payload.presence);
-          setHasVoted(false);
-          setMyVote(null);
           if (payload.activity) {
             const act: ActivityEvent = payload.activity;
             setActivities((prev) => {
@@ -310,7 +288,6 @@ export function useBatterySocket({
     };
   }, [applyServerState, roomId]);
 
-  // Real browser activity / idle detection (anonymous)
   useEffect(() => {
     let currentStatus: UserStatus = document.hidden ? 'idle' : 'active';
     let idleTimeout: number | null = null;
@@ -357,68 +334,55 @@ export function useBatterySocket({
     };
   }, [sendMessage]);
 
-  // Use reliable HTTP POST for vote mutation so every click is guaranteed to count & update battery immediately,
-  // while the server broadcasts the update via WebSocket to all other participants.
+  // Multi-click voting with optimistic increment + sequential server queue so fast clicks never get dropped or overwritten
   const castVote = useCallback(
-    async (category: VoteCategory) => {
-      if (hasVoted) {
-        if (myVote) {
-          onAlreadyVotedRef.current?.(myVote);
-        }
-        return;
-      }
-      if (votingInFlightRef.current) return;
-      votingInFlightRef.current = true;
-
+    (category: VoteCategory) => {
       const eventId = createRandomToken('vote');
-      try {
-        const res = await fetch('/api/vote', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            roomId,
-            voterToken: voterTokenRef.current,
-            category,
-            eventId,
-          }),
-        });
-        const data = await res.json();
-        if (data?.state) {
-          applyServerState(data.state as SessionState);
+      pendingOptimisticCountRef.current += 1;
+
+      setVotes((prev) => ({
+        ...prev,
+        [category]: prev[category] + 1,
+      }));
+      setLastActiveVote({ category, key: Date.now() });
+      onVoteConfirmedRef.current?.(category);
+
+      voteQueueRef.current = voteQueueRef.current.then(async () => {
+        try {
+          const res = await fetch('/api/vote', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              roomId,
+              voterToken: voterTokenRef.current,
+              category,
+              eventId,
+            }),
+          });
+          const data = await res.json();
+          pendingOptimisticCountRef.current = Math.max(0, pendingOptimisticCountRef.current - 1);
+          if (data?.state && pendingOptimisticCountRef.current === 0 && mountedRef.current) {
+            applyServerState(data.state as SessionState);
+          }
+        } catch {
+          pendingOptimisticCountRef.current = Math.max(0, pendingOptimisticCountRef.current - 1);
+          sendMessage('vote:cast', { eventId, category });
         }
-        if (res.status === 409 && data?.myVote) {
-          setHasVoted(true);
-          setMyVote(data.myVote);
-          onAlreadyVotedRef.current?.(data.myVote);
-        } else if (res.ok) {
-          setHasVoted(true);
-          setMyVote(category);
-          setLastActiveVote({ category, key: Date.now() });
-          onVoteConfirmedRef.current?.(category);
-        }
-      } catch {
-        // Fallback to WebSocket if HTTP request fails
-        const sent = sendMessage('vote:cast', { eventId, category });
-        if (sent) {
-          onVoteConfirmedRef.current?.(category);
-        }
-      } finally {
-        votingInFlightRef.current = false;
-      }
+      });
     },
-    [applyServerState, hasVoted, myVote, roomId, sendMessage]
+    [applyServerState, roomId, sendMessage]
   );
 
   const setFocusedCategory = useCallback(
     (category: VoteCategory | null) => {
-      if (hasVoted) return;
       sendMessage('presence:focus', { category });
     },
-    [hasVoted, sendMessage]
+    [sendMessage]
   );
 
   const resetSession = useCallback(async () => {
     const eventId = createRandomToken('reset');
+    pendingOptimisticCountRef.current = 0;
     try {
       const res = await fetch('/api/reset', {
         method: 'POST',
@@ -441,8 +405,6 @@ export function useBatterySocket({
     presence,
     activities,
     timeline,
-    hasVoted,
-    myVote,
     lastActiveVote,
     castVote,
     setFocusedCategory,

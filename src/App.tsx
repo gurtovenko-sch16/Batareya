@@ -36,7 +36,7 @@ export default function App() {
     }
     toastTimerRef.current = window.setTimeout(() => {
       setToastText(null);
-    }, 2000);
+    }, 1800);
   }, []);
 
   const {
@@ -45,8 +45,6 @@ export default function App() {
     presence,
     activities,
     timeline,
-    hasVoted,
-    myVote,
     lastActiveVote,
     castVote,
     setFocusedCategory,
@@ -54,10 +52,7 @@ export default function App() {
   } = useBatterySocket({
     roomId,
     onVoteConfirmed: () => {
-      showToast('Ваш анонімний голос враховано!');
-    },
-    onAlreadyVoted: () => {
-      showToast('Ви вже проголосували в цьому раунді (1 голос на учасника)');
+      showToast('Голос враховано!');
     },
   });
 
@@ -147,7 +142,7 @@ export default function App() {
         }}
       >
         <Check className="w-4 h-4 stroke-[3.5]" />
-        <span>{toastText || 'Ваш анонімний голос враховано!'}</span>
+        <span>{toastText || 'Голос враховано!'}</span>
       </div>
 
       {/* Основна двопанельна сітка як на зразку */}
@@ -163,7 +158,7 @@ export default function App() {
               '0 8px 0 #10163a, 0 16px 32px rgba(0, 0, 0, 0.5), inset 0 2px 0 rgba(255, 255, 255, 0.25)',
           }}
         >
-          {/* Декоративні зірочки у правому верхньому куті */}
+          {/* Декоративна іскорка у правому верхньому куті */}
           <div
             className="hidden sm:flex items-center gap-1.5 absolute top-3.5 right-4 text-[#ffca18]"
             aria-hidden="true"
@@ -192,32 +187,17 @@ export default function App() {
             </p>
 
             <div
-              className={`inline-flex items-center gap-2 rounded-xl border-2 px-3.5 py-1 text-xs font-extrabold ${
-                hasVoted
-                  ? 'bg-emerald-950/90 border-emerald-400 text-emerald-200'
-                  : 'bg-[#0b1544] border-[#10163a] text-sky-100'
-              }`}
+              className="inline-flex items-center gap-2 rounded-xl border-2 px-3.5 py-1 text-xs font-extrabold bg-[#0b1544] border-[#10163a] text-sky-100"
               style={{ boxShadow: '0 3px 0 #10163a' }}
             >
-              {hasVoted ? (
-                <>
-                  <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span>Ваш анонімний голос зараховано! Очікуйте оновлення результатів команди.</span>
-                </>
-              ) : (
-                <>
-                  <Pointer className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                  <span>Обери одну відповідь. Анонімно: 1 учасник = 1 голос.</span>
-                </>
-              )}
+              <Pointer className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+              <span>Обери відповідь. Кожне натискання = один анонімний голос.</span>
             </div>
           </header>
 
           {/* 4 картки-кнопки */}
           <BatteryCards
             presence={presence}
-            hasVoted={hasVoted}
-            myVote={myVote}
             lastActiveVote={lastActiveVote}
             onVote={handleVote}
             onFocusChange={setFocusedCategory}

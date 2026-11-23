@@ -290,21 +290,12 @@ async function startServer(): Promise<void> {
     const voterToken = sanitizeToken(body.voterToken);
     const category = body.category;
 
-    if (!voterToken || !isValidCategory(category)) {
+    if (!isValidCategory(category)) {
       res.status(400).json({ error: 'Invalid vote payload' });
       return;
     }
 
-    const existingVote = room.votedTokens.get(voterToken);
-    if (existingVote) {
-      res.status(409).json({
-        alreadyVoted: true,
-        myVote: existingVote,
-        state: serializeRoomState(room, voterToken),
-      });
-      return;
-    }
-
+    const effectiveToken = voterToken || crypto.randomUUID();
     const eventId =
       typeof body.eventId === 'string' && body.eventId.length > 0
         ? body.eventId.slice(0, 80)
@@ -313,7 +304,7 @@ async function startServer(): Promise<void> {
 
     if (trackProcessedEvent(room, eventId)) {
       room.votes[category] += 1;
-      room.votedTokens.set(voterToken, category);
+      room.votedTokens.set(effectiveToken, category);
       const activity: ActivityEvent = {
         id: eventId,
         type: 'vote',
@@ -339,7 +330,7 @@ async function startServer(): Promise<void> {
     res.json({
       ok: true,
       myVote: category,
-      state: serializeRoomState(room, voterToken),
+      state: serializeRoomState(room, effectiveToken),
     });
   });
 
@@ -483,20 +474,6 @@ async function startServer(): Promise<void> {
         const category = payload.category;
         if (!isValidCategory(category)) return;
 
-        // Enforce 1 anonymous vote per voterToken per voting round
-        const existingVote = room.votedTokens.get(connMeta.voterToken);
-        if (existingVote) {
-          send({
-            type: 'vote:already_voted',
-            payload: {
-              myVote: existingVote,
-              votes: { ...room.votes },
-              presence: computePresenceStats(room),
-            },
-          });
-          return;
-        }
-
         const eventId =
           typeof payload.eventId === 'string' && payload.eventId.length > 0
             ? payload.eventId.slice(0, 80)
@@ -574,11 +551,7 @@ async function startServer(): Promise<void> {
       }
 
       if (msg.type === 'presence:focus') {
-        // Ignore hover focus once this browser already voted
-        const nextChoice =
-          !room.votedTokens.has(connMeta.voterToken) && isValidCategory(payload.category)
-            ? payload.category
-            : null;
+        const nextChoice = isValidCategory(payload.category) ? payload.category : null;
         if (connMeta.focusedChoice !== nextChoice) {
           connMeta.focusedChoice = nextChoice;
           connMeta.lastActiveAt = now;
