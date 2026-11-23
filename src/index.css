@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+:root {
+  --bg-deep: #151c48;
+  --bg-royal: #25368a;
+  --gold-top: #fff275;
+  --gold-mid: #ffca18;
+  --gold-bot: #f5820b;
+  --outline-dark: #10163a;
+  --panel-top: #2185f7;
+  --panel-bot: #1049a9;
+  --panel-border: #63b3ff;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  font-family: "Nunito", "Trebuchet MS", system-ui, -apple-system, sans-serif;
+  background-color: var(--bg-deep);
+  background-image:
+    repeating-conic-gradient(
+      from 0deg at 50% 38%,
+      rgba(255, 255, 255, 0.04) 0deg 10deg,
+      transparent 10deg 20deg
+    ),
+    radial-gradient(circle at 50% 30%, #374fc7 0%, #1d296b 55%, #0e1438 100%);
+  background-attachment: fixed;
+  color: #ffffff;
+  min-height: 100vh;
+  margin: 0;
+  overflow-x: hidden;
+}
+
+.font-display {
+  font-family: "Rubik", "Arial Black", system-ui, sans-serif;
+}
+
+.font-mono-num {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.title-gold-gradient {
+  background: linear-gradient(180deg, var(--gold-top) 0%, var(--gold-mid) 52%, var(--gold-bot) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  -webkit-text-stroke: 2.5px var(--outline-dark);
+  filter: drop-shadow(0 6px 0 var(--outline-dark)) drop-shadow(0 10px 20px rgba(0, 0, 0, 0.55));
+}
+
+.arcade-text-stroke {
+  -webkit-text-stroke: 1.5px var(--outline-dark);
+  text-shadow: 0 3px 0 var(--outline-dark);
+}
+
+@keyframes energySweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.battery-sweep::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.42) 50%,
+    transparent 100%
+  );
+  animation: energySweep 2.2s infinite linear;
+}
+
+@keyframes voteRipple {
+  0% {
+    transform: scale(0.92);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.06);
+    opacity: 0;
+  }
+}
+
+.animate-vote-ripple {
+  animation: voteRipple 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .battery-sweep::after,
+  .animate-vote-ripple {
+    animation: none !important;
+  }
+}

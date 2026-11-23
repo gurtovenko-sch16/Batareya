@@ -1,0 +1,6 @@
+{
+  "name": "БАТАРЕЯ ЗМІН",
+  "description": "Інтерактивна педагогічна рефлексія з відстеженням активності учасників у режимі реального часу",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
